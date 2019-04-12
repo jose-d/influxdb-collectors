@@ -66,3 +66,25 @@ seconds=$(date +%s) #just for case of significant before
 
 drained_nodes=$(timeout ${slurm_timeout} sinfo -R --noheader| wc -l) \
   && timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},metric=drained value=${drained_nodes} $seconds" &> /dev/null
+
+# **************************
+metric='slurm.node_status'
+# **************************
+
+scontrol_o_raw=$(scontrol show nodes -o)
+nodelist=$(echo "$scontrol_o_raw" | awk '{print $1}' | cut -d '=' -f 2 | xargs)
+
+for node in ${nodelist}; do
+
+  state=$(echo "$scontrol_o_raw" | grep "$node " | sed -n -e 's/^.*State=//p' | cut -d ' ' -f 1)
+
+  possible_states="ALLOCATED IDLE MIXED RESERVED"
+  for state_test in ${possible_states}; do
+    if [[ "$state" == "$state_test" ]]; then
+      timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},metric=$state_test,node=$node value=1 $seconds" &> /dev/null
+    else
+      timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},metric=$state_test,node=$node value=0 $seconds" &> /dev/null
+    fi
+  done
+done
+
