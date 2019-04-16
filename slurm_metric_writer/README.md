@@ -2,7 +2,7 @@
 
 This collector written in BASH collects data from slurm and exports them into influxdb using the HTTP api:
 
-![text](/doc/14day_utilization_screenshot.png)
+![text](slurm_metric_writer/doc/14day_utilization_screenshot.png)
 
 ## Collected metrics
 
