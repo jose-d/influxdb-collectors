@@ -3,7 +3,9 @@
 This collector written in BASH collects data from slurm and exports them into influxdb using the HTTP api.
 
 ![Example of visualization in Grafana](/slurm_metric_writer/doc/14day_utilization_screenshot.png)
-Example Grafana visualization using data collected by this script.
+Example Grafana visualization using slurm.node_status data collected by this script. ([Panel Carpet plot by Petr Slavotínek](https://grafana.com/plugins/petrslavotinek-carpetplot-panel) ) 
+
+Query: ```SELECT sum("value") FROM "slurm.node_status" WHERE ("metric" = 'ALLOCATED') AND $timeFilter GROUP BY time(1m) fill(null)```
 
 ## Collected metrics
 
@@ -23,9 +25,9 @@ Example Grafana visualization using data collected by this script.
 - node state - `ALLOCATED|IDLE|MIXED|RESERVED`
 - ( parsed ```scontrol show nodes -o``` )
 
-## Configuration
+## Configuration and install
 
-Just modify the variables at the beginning of the script.
+Just modify the variables at the beginning of the script to match your influxDB setup, execution can be managed in cron.
 
 ## Compatibility
 
