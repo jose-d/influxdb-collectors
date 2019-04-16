@@ -23,3 +23,7 @@ This collector written in BASH collects data from slurm and exports them into in
 ## Configuration
 
 Just modify the variables at the beginning of the script.
+
+## Compatibility
+
+Tested with Slurm 17.11.7.
