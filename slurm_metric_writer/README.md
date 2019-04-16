@@ -1,8 +1,9 @@
 # Slurm metric writer
 
-This collector written in BASH collects data from slurm and exports them into influxdb using the HTTP api:
+This collector written in BASH collects data from slurm and exports them into influxdb using the HTTP api.
 
-![text](/doc/14day_utilization_screenshot.png)
+![Example of visualization in Grafana](/slurm_metric_writer/doc/14day_utilization_screenshot.png)
+Example Grafana visualization using data collected by this script.
 
 ## Collected metrics
 
