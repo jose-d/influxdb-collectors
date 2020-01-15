@@ -1,17 +1,39 @@
 #!/bin/bash
 
 # URL of influxDB
-db_endpoint="http://172.16.120.1:8086"
+export db_endpoint="http://172.16.120.1:8086"
 # database to push the data in
-database="metrics"
+export database="metrics"
 # HTTP basic auth user
-username=""
+export username="telegraf"
 # HTTP basic auth password
-password=""
+export password="acha9xaGae"
 # slurm timeout
-slurm_timeout=5
+export slurm_timeout=5
 # curl timeout
 curl_timeout=5
+
+
+
+DEBUG=1
+
+
+
+
+function curl_wrapper_1 () {
+  value=$1
+  tag_partition=$2
+  tag_metric=$3
+  metric=$4
+  
+  timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},partition=${partition},metric=${tag_metric} value=${value} $seconds" &> /dev/null
+
+  if [ -n "$DEBUG" ]; then
+    echo "xpost: $db_endpoint/write?db=$database&precision=s"
+    echo "data-binary: ${metric},partition=${partition},metric=${tag_metric} value=${value} $seconds"
+  fi
+
+}
 
 
 
@@ -20,31 +42,28 @@ metric='slurm.partition_usage'
 # ****************************
 
 # we parse output of command:
-# jose@koios1:~$ sinfo -O partitionname,nodeaiot
-# PARTITION           NODES(A/I/O/T)	# that means "allocated/idle/other/total"
+# $ sinfo -O partitionname,nodeaiot
+# PARTITION           NODES(A/I/O/T)    # that means "allocated/idle/other/total"
 # long                22/5/0/27
 # gpu                 0/0/1/1
 # short               22/5/1/28
 # debug               2/1/1/4
-# jose@koios1:~$
+# $
 
 sinfo_data=$(timeout ${slurm_timeout} sinfo -O partitionname,nodeaiot)	# call sinfo and collect data
 
-seconds=$(date +%s) #current unix time
+export seconds=$(date +%s) #current unix time
 
 partition_list=$(echo "$sinfo_data" | awk '{print $1}' | tail -n +2 | xargs)	# extract partition list
 
 for partition in ${partition_list}; do
   partition_data=$(echo "$sinfo_data" | grep $partition | xargs)
 
-  A=$(echo "$partition_data" | cut -d ' ' -f 2 | cut -d '/' -f 1 | xargs) \
-    && timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},partition=${partition},metric=allocated value=${A} $seconds" &> /dev/null
-  I=$(echo "$partition_data" | cut -d '/' -f 2 | xargs) \
-    && timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},partition=${partition},metric=idle value=${I} $seconds" &> /dev/null
-  O=$(echo "$partition_data" | cut -d '/' -f 3 | xargs) \
-    && timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},partition=${partition},metric=other value=${O} $seconds" &> /dev/null
-  T=$(echo "$partition_data" | cut -d '/' -f 4 | xargs) \
-    && timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},partition=${partition},metric=total value=${T} $seconds" &> /dev/null
+  value=$(echo "$partition_data" | cut -d ' ' -f 2 | cut -d '/' -f 1 | xargs) && curl_wrapper_1 ${value} $partition 'allocated' $metric
+  value=$(echo "$partition_data" | cut -d '/' -f 2 | xargs) && curl_wrapper_1 ${value} $partition 'idle' $metric
+  value=$(echo "$partition_data" | cut -d '/' -f 3 | xargs) && curl_wrapper_1 ${value} $partition 'other' $metric
+  value=$(echo "$partition_data" | cut -d '/' -f 4 | xargs) && curl_wrapper_1 ${value} $partition 'total' $metric
+
 done
 
 # ************************
@@ -77,6 +96,15 @@ nodelist=$(echo "$scontrol_o_raw" | awk '{print $1}' | cut -d '=' -f 2 | xargs)
 for node in ${nodelist}; do
 
   state=$(echo "$scontrol_o_raw" | grep "$node " | sed -n -e 's/^.*State=//p' | cut -d ' ' -f 1)
+
+  #combined states conversion:
+  if [[ "$state" == "MIXED+DRAIN" ]]; then
+    state="MIXED"
+  fi
+
+  if [[ "$state" == "ALLOCATED+DRAIN" ]]; then
+    state="ALLOCATED"
+  fi
 
   possible_states="ALLOCATED IDLE MIXED RESERVED"
   for state_test in ${possible_states}; do
