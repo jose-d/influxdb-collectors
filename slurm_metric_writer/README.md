@@ -27,8 +27,12 @@ Query: ```SELECT sum("value") FROM "slurm.node_status" WHERE ("metric" = 'ALLOCA
 
 ## Configuration and install
 
-Just modify the variables at the beginning of the script to match your influxDB setup, execution can be managed in cron.
+Just modify the variables at the beginning of the script to match your influxDB setup, execution can be managed in cron - example line in crontab:
+
+```
+* * * * * /bin/bash /usr/local/sw/monitors/influxdb-collectors/slurm_metric_writer/collect.bash &> /dev/null
+```
 
 ## Compatibility
 
-Tested with Slurm 17.11.7.
+Tested with Slurm 17.11.7, 18.08.8;
