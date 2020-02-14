@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # URL of influxDB
-export db_endpoint="http://172.16.120.1:8086"
+export db_endpoint="http://1.2.3.4:8086"
 # database to push the data in
 export database="metrics"
 # HTTP basic auth user
 export username="telegraf"
 # HTTP basic auth password
-export password="acha9xaGae"
+export password="telegraf"
 # slurm timeout
 export slurm_timeout=5
 # curl timeout
