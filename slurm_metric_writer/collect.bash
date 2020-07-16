@@ -14,11 +14,11 @@ export slurm_timeout=5
 curl_timeout=5
 
 
+SINFO="/usr/bin/sinfo"
+SCONTROL="/usr/bin/scontrol"
+SQUEUE="/usr/bin/squeue"
 
 DEBUG=1
-
-
-
 
 function curl_wrapper_1 () {
   value=$1
@@ -33,6 +33,13 @@ function curl_wrapper_1 () {
     echo "data-binary: ${metric},partition=${partition},metric=${tag_metric} value=${value} $seconds"
   fi
 
+}
+
+function echo_debug () {
+  message="$1"
+  if [ -n "$DEBUG" ]; then
+    echo "${message}"
+  fi
 }
 
 
@@ -50,7 +57,7 @@ metric='slurm.partition_usage'
 # debug               2/1/1/4
 # $
 
-sinfo_data=$(timeout ${slurm_timeout} sinfo -O partitionname,nodeaiot)	# call sinfo and collect data
+sinfo_data=$(timeout ${slurm_timeout} ${SINFO} -O partitionname:40,nodeaiot)	# call sinfo and collect data
 
 export seconds=$(date +%s) #current unix time
 
@@ -66,52 +73,77 @@ for partition in ${partition_list}; do
 
 done
 
+#curl options used:
+# -S, --show-error .. When used with -s it makes curl show an error message if it fails.
+# -s, --silent .. Silent or quiet mode. Don't show progress meter or error messages.  Makes Curl mute.
+# -i, --include .. (HTTP) Include the HTTP-header in the output. The HTTP-header includes things like server-name, date of the document, HTTP-version and more...
+
+curl_prefix_template="timeout ${curl_timeout} curl --silent --show-error --include -u $username:$password -XPOST \"$db_endpoint/write?db=$database&precision=s\" --data-binary"
+
 # ************************
 metric='slurm.queue_stats'
 # ************************
 
-seconds=$(date +%s) #just for case of significant before
 
-running_jobs=$(timeout ${slurm_timeout} squeue -t R --noheader | wc -l) && seconds=$(date +%s) \
-  && timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},metric=running value=${running_jobs} $seconds" &> /dev/null
-waiting_jobs=$(timeout ${slurm_timeout} squeue -t PD --noheader | wc -l) && seconds=$(date +%s) \
-  && timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},metric=waiting value=${waiting_jobs} $seconds" &> /dev/null
+# * running jobs ("R" state in slurm)
+seconds=$(date +%s)
+running_jobs=$(timeout ${slurm_timeout} ${SQUEUE} -t R --noheader | wc -l)
+echo_debug "running_jobs: ${running_jobs}"
+cmd_string="${curl_prefix_template} \"${metric},metric=running value=${running_jobs} $seconds\""
+res=$(eval $cmd_string)
+rc=$?
+
+# * waiting jobs ("PD" state in slurm)
+seconds=$(date +%s)
+waiting_jobs=$(timeout ${slurm_timeout} ${SQUEUE} -t PD --noheader | wc -l)
+echo_debug "waiting_jobs: ${waiting_jobs}"
+cmd_string="${curl_prefix_template} \"${metric},metric=waiting value=${waiting_jobs} $seconds\""
+res=$(eval $cmd_string)
+rc=$?
+
 
 # **************************
 metric='slurm.node_stats'
 # **************************
 
-seconds=$(date +%s) #just for case of significant before
-
-drained_nodes=$(timeout ${slurm_timeout} sinfo -R --noheader| wc -l) \
-  && timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},metric=drained value=${drained_nodes} $seconds" &> /dev/null
+seconds=$(date +%s)
+drained_nodes=$(timeout ${slurm_timeout} ${SINFO} -R --noheader| wc -l)
+echo_debug "drained_nodes: ${drained_nodes}"
+cmd_string="${curl_prefix_template} \"${metric},metric=drained value=${drained_nodes} $seconds\""
+res=$(eval $cmd_string)
+rc=$?
 
 # **************************
 metric='slurm.node_status'
 # **************************
 
-scontrol_o_raw=$(scontrol show nodes -o)
-nodelist=$(echo "$scontrol_o_raw" | awk '{print $1}' | cut -d '=' -f 2 | xargs)
+seconds=$(date +%s)
+nodelist=$(${SCONTROL} show nodes -o | awk '{print $1}' | cut -d '=' -f 2 | xargs)
 
 for node in ${nodelist}; do
 
-  state=$(echo "$scontrol_o_raw" | grep "$node " | sed -n -e 's/^.*State=//p' | cut -d ' ' -f 1)
+  state=$(${SCONTROL} show -o node=${node} | tr ' ' '\n' | grep State | cut -d '=' -f 2)
+  echo_debug "node: ${node} / state: ${state}"
 
   #combined states conversion:
-  if [[ "$state" == "MIXED+DRAIN" ]]; then
-    state="MIXED"
-  fi
 
-  if [[ "$state" == "ALLOCATED+DRAIN" ]]; then
-    state="ALLOCATED"
-  fi
+  if [[ "$state" == *"POWER"* ]]; then state="POWER"; fi
+  if [[ "$state" == "MIXED+DRAIN" ]]; then state="MIXED"; fi
+  if [[ "$state" == "ALLOCATED+DRAIN" ]]; then state="ALLOCATED"; fi
+  if [[ "$state" == "IDLE+DRAIN" ]]; then state="DRAIN"; fi
 
-  possible_states="ALLOCATED IDLE MIXED RESERVED"
+  possible_states="ALLOCATED IDLE MIXED RESERVED POWER DRAIN"
   for state_test in ${possible_states}; do
     if [[ "$state" == "$state_test" ]]; then
-      timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},metric=$state_test,node=$node value=1 $seconds" &> /dev/null
+      cmd_string="${curl_prefix_template} \"${metric},metric=$state_test,node=$node value=1 $seconds\""
+      res=$(eval $cmd_string)
+      rc=$?
+      echo_debug "curl_rc: $rc, state: ${state_test}, node: ${node}, value: 1"
     else
-      timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},metric=$state_test,node=$node value=0 $seconds" &> /dev/null
+      cmd_string="${curl_prefix_template} \"${metric},metric=$state_test,node=$node value=0 $seconds\""
+      res=$(eval $cmd_string)
+      rc=$?
+      echo_debug "curl_rc: $rc, state: ${state_test}, node: ${node}, value: 0"
     fi
   done
 done
