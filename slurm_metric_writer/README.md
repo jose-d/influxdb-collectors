@@ -33,6 +33,8 @@ Just modify the variables at the beginning of the script to match your influxDB 
 * * * * * /bin/bash /usr/local/sw/monitors/influxdb-collectors/slurm_metric_writer/collect.bash &> /dev/null
 ```
 
+![Example of Grafana visualisation](slurm_metric_writer/doc/Screenshot_2020-07-16 Slurm stats - Grafana.png)
+
 ## Compatibility
 
 Tested with Slurm 17.11.7, 18.08.8;
