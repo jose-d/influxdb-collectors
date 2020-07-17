@@ -18,22 +18,8 @@ SINFO="/usr/bin/sinfo"
 SCONTROL="/usr/bin/scontrol"
 SQUEUE="/usr/bin/squeue"
 
+
 DEBUG=1
-
-function curl_wrapper_1 () {
-  value=$1
-  tag_partition=$2
-  tag_metric=$3
-  metric=$4
-  
-  timeout ${curl_timeout} curl -i -u $username:$password -XPOST "$db_endpoint/write?db=$database&precision=s" --data-binary "${metric},partition=${partition},metric=${tag_metric} value=${value} $seconds" &> /dev/null
-
-  if [ -n "$DEBUG" ]; then
-    echo "xpost: $db_endpoint/write?db=$database&precision=s"
-    echo "data-binary: ${metric},partition=${partition},metric=${tag_metric} value=${value} $seconds"
-  fi
-
-}
 
 function echo_debug () {
   message="$1"
@@ -42,6 +28,7 @@ function echo_debug () {
   fi
 }
 
+curl_prefix_template="timeout ${curl_timeout} curl --silent --show-error --include -u $username:$password -XPOST \"$db_endpoint/write?db=$database&precision=s\" --data-binary"
 
 
 # ****************************
@@ -58,18 +45,30 @@ metric='slurm.partition_usage'
 # $
 
 sinfo_data=$(timeout ${slurm_timeout} ${SINFO} -O partitionname:40,nodeaiot)	# call sinfo and collect data
-
-export seconds=$(date +%s) #current unix time
-
 partition_list=$(echo "$sinfo_data" | awk '{print $1}' | tail -n +2 | xargs)	# extract partition list
+seconds=$(date +%s) #current unix time
+
 
 for partition in ${partition_list}; do
   partition_data=$(echo "$sinfo_data" | grep $partition | xargs)
+  echo_debug "partition_data: ${partition_data}"
+  # format is like allocated/idle/other/total
+  #
+  # long 21/4/0/25
+  # gpu 0/1/0/1
+  # short 17/6/0/23
+  # debug 0/3/0/3
 
-  value=$(echo "$partition_data" | cut -d ' ' -f 2 | cut -d '/' -f 1 | xargs) && curl_wrapper_1 ${value} $partition 'allocated' $metric
-  value=$(echo "$partition_data" | cut -d '/' -f 2 | xargs) && curl_wrapper_1 ${value} $partition 'idle' $metric
-  value=$(echo "$partition_data" | cut -d '/' -f 3 | xargs) && curl_wrapper_1 ${value} $partition 'other' $metric
-  value=$(echo "$partition_data" | cut -d '/' -f 4 | xargs) && curl_wrapper_1 ${value} $partition 'total' $metric
+  cnt_allocated=$(echo "$partition_data" | cut -d ' ' -f 2 | cut -d '/' -f 1 | xargs)
+  cnt_idle=$(echo "$partition_data" | cut -d '/' -f 2 | xargs)
+  cnt_other=$(echo "$partition_data" | cut -d '/' -f 3 | xargs)
+  cnt_total=$(echo "$partition_data" | cut -d '/' -f 4 | xargs)
+
+  cmd_string="${curl_prefix_template} \"${metric},partition=${partition} cnt_allocated=${cnt_allocated},cnt_idle=${cnt_idle},cnt_other=${cnt_other},cnt_total=${cnt_total} $seconds\""
+  echo_debug "cmd: ${cmd_string}"
+  res=$(eval $cmd_string)
+  rc=$?
+  echo_debug "rc: ${rc}, res: ${res}"
 
 done
 
@@ -78,7 +77,6 @@ done
 # -s, --silent .. Silent or quiet mode. Don't show progress meter or error messages.  Makes Curl mute.
 # -i, --include .. (HTTP) Include the HTTP-header in the output. The HTTP-header includes things like server-name, date of the document, HTTP-version and more...
 
-curl_prefix_template="timeout ${curl_timeout} curl --silent --show-error --include -u $username:$password -XPOST \"$db_endpoint/write?db=$database&precision=s\" --data-binary"
 
 # ************************
 metric='slurm.queue_stats'
