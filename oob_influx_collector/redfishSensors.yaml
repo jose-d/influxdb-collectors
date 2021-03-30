@@ -1,0 +1,35 @@
+---
+accounting:
+  logfile: /var/log/powercollector.log
+  logperiod: 600
+
+influxdb:
+  db_host: 192.168.1.1
+  db_port: 8086
+  http_user: telegraf
+  http_pass: telegraf
+  db: metrics
+
+endpoints:
+  - names: n[1-100]
+    managers: n[1-100]-ipmi
+    ipmi_user: user
+    ipmi_pass: pass
+    model: intel_v1
+
+  - names: n[101-120]
+    managers: n[101-120]-ipmi
+    ipmi_user: user
+    ipmi_pass: pass
+    model: supermicro_v1
+
+  - names: switch1
+    managers: switch1
+    model: snmp_v1
+    ro_community: public
+    snmp_oids:
+      - '.1.3.6.1.2.1.99.1.1.1.4.602240030'
+      - '.1.3.6.1.2.1.99.1.1.1.4.601240030'
+
+
+
