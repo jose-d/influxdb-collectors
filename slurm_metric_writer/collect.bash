@@ -93,7 +93,7 @@ rc=$?
 
 # * waiting jobs ("PD" state in slurm)
 seconds=$(date +%s)
-waiting_jobs=$(timeout ${slurm_timeout} ${SQUEUE} -t PD --noheader | wc -l)
+waiting_jobs=$(timeout ${slurm_timeout} ${SQUEUE} --array -t PD --noheader | wc -l)
 echo_debug "waiting_jobs: ${waiting_jobs}"
 cmd_string="${curl_prefix_template} \"${metric},metric=waiting value=${waiting_jobs} $seconds\""
 res=$(eval $cmd_string)
