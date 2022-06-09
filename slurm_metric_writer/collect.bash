@@ -1,25 +1,25 @@
 #!/bin/bash
 
 # URL of influxDB
-export db_endpoint="http://1.2.3.4:8086"
+export db_endpoint="http://172.16.120.1:8086"
 # database to push the data in
 export database="metrics"
 # HTTP basic auth user
 export username="telegraf"
 # HTTP basic auth password
-export password="telegraf"
+export password="NotRealPassword"
 # slurm timeout
 export slurm_timeout=5
 # curl timeout
 curl_timeout=5
 
-
 SINFO="/usr/bin/sinfo"
 SCONTROL="/usr/bin/scontrol"
 SQUEUE="/usr/bin/squeue"
+SDIAG="/usr/bin/sdiag"
 
 
-DEBUG=1
+#DEBUG=1
 
 function echo_debug () {
   message="$1"
@@ -35,29 +35,19 @@ curl_prefix_template="timeout ${curl_timeout} curl --silent --show-error --inclu
 metric='slurm.partition_usage'
 # ****************************
 
-# we parse output of command:
 # $ sinfo -O partitionname,nodeaiot
 # PARTITION           NODES(A/I/O/T)    # that means "allocated/idle/other/total"
-# long                22/5/0/27
-# gpu                 0/0/1/1
-# short               22/5/1/28
-# debug               2/1/1/4
-# $
+# part1               22/5/0/27
+# part2               0/0/1/1
 
-sinfo_data=$(timeout ${slurm_timeout} ${SINFO} -O partitionname:40,nodeaiot)	# call sinfo and collect data
-partition_list=$(echo "$sinfo_data" | awk '{print $1}' | tail -n +2 | xargs)	# extract partition list
+sinfo_data=$(timeout ${slurm_timeout} ${SINFO} -O partitionname:40,nodeaiot)    # call sinfo and collect data
+partition_list=$(echo "$sinfo_data" | awk '{print $1}' | tail -n +2 | xargs)    # extract partition list
 seconds=$(date +%s) #current unix time
 
 
 for partition in ${partition_list}; do
   partition_data=$(echo "$sinfo_data" | grep $partition | xargs)
   echo_debug "partition_data: ${partition_data}"
-  # format is like allocated/idle/other/total
-  #
-  # long 21/4/0/25
-  # gpu 0/1/0/1
-  # short 17/6/0/23
-  # debug 0/3/0/3
 
   cnt_allocated=$(echo "$partition_data" | cut -d ' ' -f 2 | cut -d '/' -f 1 | xargs)
   cnt_idle=$(echo "$partition_data" | cut -d '/' -f 2 | xargs)
@@ -82,44 +72,34 @@ done
 metric='slurm.queue_stats'
 # ************************
 
+sdiag_output=$(timeout ${slurm_timeout} ${SDIAG} 2>&1 )
 
-# * running jobs ("R" state in slurm)
-seconds=$(date +%s)
-running_jobs=$(timeout ${slurm_timeout} ${SQUEUE} -t R --noheader | wc -l)
-echo_debug "running_jobs: ${running_jobs}"
-cmd_string="${curl_prefix_template} \"${metric},metric=running value=${running_jobs} $seconds\""
-res=$(eval $cmd_string)
-rc=$?
+sdiag_job_states_ts=$(echo "${sdiag_output}" | grep 'Job states ts' | cut -d '(' -f 2 | tr -d ')' | xargs)
+sdiag_jobs_pending=$(echo "${sdiag_output}" | grep 'Jobs pending' | cut -d ':' -f 2 | xargs)
+sdiag_jobs_running=$(echo "${sdiag_output}" | grep 'Jobs running' | cut -d ':' -f 2 | xargs)
 
-# * waiting jobs ("PD" state in slurm)
-seconds=$(date +%s)
-waiting_jobs=$(timeout ${slurm_timeout} ${SQUEUE} --array -t PD --noheader | wc -l)
-echo_debug "waiting_jobs: ${waiting_jobs}"
-cmd_string="${curl_prefix_template} \"${metric},metric=waiting value=${waiting_jobs} $seconds\""
-res=$(eval $cmd_string)
-rc=$?
+echo_debug "sdiag ts: ${sdiag_job_states_ts} sdiag jobs pending: ${sdiag_jobs_pending} sdiag jobs running: ${sdiag_jobs_running}"
 
+#submit it to influx (check if vars are numbers really
+[[ $sdiag_jobs_running == ?(-)+([0-9]) ]] && cmd_string="${curl_prefix_template} \"${metric},metric=running value=${sdiag_jobs_running} ${sdiag_job_states_ts}\"" && res=$(eval $cmd_string)
+[[ $sdiag_jobs_pending == ?(-)+([0-9]) ]] && cmd_string="${curl_prefix_template} \"${metric},metric=waiting value=${sdiag_jobs_pending} ${sdiag_job_states_ts}\"" && res=$(eval $cmd_string)
 
-# **************************
-metric='slurm.node_stats'
-# **************************
-
-seconds=$(date +%s)
-drained_nodes=$(timeout ${slurm_timeout} ${SINFO} -R --noheader| wc -l)
-echo_debug "drained_nodes: ${drained_nodes}"
-cmd_string="${curl_prefix_template} \"${metric},metric=drained value=${drained_nodes} $seconds\""
-res=$(eval $cmd_string)
-rc=$?
 
 # **************************
 metric='slurm.node_status'
 # **************************
 
-seconds=$(date +%s)
+nodes_mixed=0
+nodes_allocated=0
+nodes_drained=0
+nodes_power=0
+
+#seconds=$(date +%s)
 nodelist=$(${SCONTROL} show nodes -o | awk '{print $1}' | cut -d '=' -f 2 | xargs)
 
 for node in ${nodelist}; do
 
+  seconds=$(date +%s)
   state=$(${SCONTROL} show -o node=${node} | tr ' ' '\n' | grep State | cut -d '=' -f 2)
   echo_debug "node: ${node} / state: ${state}"
 
@@ -129,20 +109,48 @@ for node in ${nodelist}; do
   if [[ "$state" == "MIXED+DRAIN" ]]; then state="MIXED"; fi
   if [[ "$state" == "ALLOCATED+DRAIN" ]]; then state="ALLOCATED"; fi
   if [[ "$state" == "IDLE+DRAIN" ]]; then state="DRAIN"; fi
+  if [[ "$state" == "DOWN+DRAIN" ]]; then state="DRAIN"; fi
 
-  possible_states="ALLOCATED IDLE MIXED RESERVED POWER DRAIN"
-  for state_test in ${possible_states}; do
-    if [[ "$state" == "$state_test" ]]; then
-      cmd_string="${curl_prefix_template} \"${metric},metric=$state_test,node=$node value=1 $seconds\""
-      res=$(eval $cmd_string)
-      rc=$?
-      echo_debug "curl_rc: $rc, state: ${state_test}, node: ${node}, value: 1"
-    else
-      cmd_string="${curl_prefix_template} \"${metric},metric=$state_test,node=$node value=0 $seconds\""
-      res=$(eval $cmd_string)
-      rc=$?
-      echo_debug "curl_rc: $rc, state: ${state_test}, node: ${node}, value: 0"
-    fi
-  done
+  case ${state} in
+    MIXED)
+      statevar=1
+      nodes_mixed=$((nodes_mixed+1))
+      ;;
+    ALLOCATED)
+      statevar=2
+      nodes_allocated=$((nodes_allocated+1))
+      ;;
+    IDLE)
+      statevar=4
+      nodes_idle=$((nodes_idle+1))
+      ;;
+    DRAIN)
+      statevar=8
+      nodes_drained=$((nodes_drained+1))
+      ;;
+    POWER)
+      statevar=16
+      nodes_power=$((nodes_power+1))
+      ;;
+    *)
+      statevar=0
+      ;;
+   esac
+
+   cmd_string="${curl_prefix_template} \"${metric},node=$node state=${statevar} $seconds\""
+   res=$(eval $cmd_string)
+
 done
 
+# **************************
+metric='slurm.node_stats'
+# **************************
+
+
+seconds=$(date +%s)
+data="drained=${nodes_drained},allocated=${nodes_allocated},mixed=${nodes_mixed},power=${nodes_power}"
+echo_debug "${metric}: ${data}"
+cmd_string="${curl_prefix_template} \"${metric} ${data} $seconds\""
+res=$(eval $cmd_string)
+rc=$?
+#echo_debug "rc: ${rc}, res: ${res}"
